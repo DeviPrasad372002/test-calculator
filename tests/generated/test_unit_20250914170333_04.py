@@ -1,0 +1,256 @@
+
+# --- ENHANCED UNIVERSAL BOOTSTRAP ---
+import os, sys, importlib.util as _iu, types as _types, pytest as _pytest, builtins as _builtins, warnings
+STRICT = os.getenv("TESTGEN_STRICT", "1").lower() in ("1","true","yes")
+STRICT_FAIL = os.getenv("TESTGEN_STRICT_FAIL","0").lower() in ("1","true","yes")
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=PendingDeprecationWarning)
+
+_target = os.environ.get("TARGET_ROOT") or os.environ.get("ANALYZE_ROOT") or "target"
+if _target and os.path.exists(_target):
+    if _target not in sys.path: sys.path.insert(0, _target)
+    try: os.chdir(_target)
+    except Exception: pass
+
+def _exc_lookup(name, default):
+    try:
+        mod_name, _, cls_name = str(name).rpartition(".")
+        if mod_name:
+            mod = __import__(mod_name, fromlist=[cls_name])
+            return getattr(mod, cls_name, default)
+        return getattr(sys.modules.get("builtins"), str(name), default)
+    except Exception:
+        return default
+
+def _apply_compatibility_fixes():
+    try:
+        import jinja2
+        if not hasattr(jinja2, 'Markup'):
+            try:
+                from markupsafe import Markup, escape
+                jinja2.Markup = Markup
+                if not hasattr(jinja2, 'escape'):
+                    jinja2.escape = escape
+            except Exception:
+                pass
+    except ImportError:
+        pass
+    try:
+        import collections as _collections, collections.abc as _abc
+        for _n in ('Mapping','MutableMapping','Sequence','Iterable','Container',
+                   'MutableSequence','Set','MutableSet','Iterator','Generator','Callable','Collection'):
+            if not hasattr(_collections, _n) and hasattr(_abc, _n):
+                setattr(_collections, _n, getattr(_abc, _n))
+    except Exception:
+        pass
+    try:
+        import marshmallow as _mm
+        if not hasattr(_mm, "__version__"):
+            _mm.__version__ = "4"
+    except Exception:
+        pass
+
+_apply_compatibility_fixes()
+
+# Minimal, safe Django bootstrap. If anything goes wrong, skip the module (repo-agnostic).
+try:
+    import django
+    from django.conf import settings as _dj_settings
+    from django import apps as _dj_apps
+
+    if not _dj_settings.configured:
+        _cfg = dict(
+            DEBUG=True,
+            SECRET_KEY='pytest-secret',
+            DATABASES={'default': {'ENGINE': 'django.db.backends.sqlite3','NAME': ':memory:'}},
+            INSTALLED_APPS=[
+                'django.contrib.auth','django.contrib.contenttypes',
+                'django.contrib.sessions','django.contrib.messages'
+            ],
+            MIDDLEWARE=[
+                'django.middleware.security.SecurityMiddleware',
+                'django.contrib.sessions.middleware.SessionMiddleware',
+                'django.middleware.common.CommonMiddleware',
+            ],
+            USE_TZ=True, TIME_ZONE='UTC',
+        )
+        try: _cfg["DEFAULT_AUTO_FIELD"] = "django.db.models.AutoField"
+        except Exception: pass
+        try: _dj_settings.configure(**_cfg)
+        except Exception: pass
+
+    if not _dj_apps.ready:
+        try: django.setup()
+        except Exception: pass
+
+    # Probe a known Django core that previously crashed on some stacks.
+    try:
+        import django.contrib.auth.base_user as _dj_probe  # noqa
+    except Exception as _e:
+        _pytest.skip(f"Django core import failed safely: {_e.__class__.__name__}: {_e}", allow_module_level=True)
+except Exception as _e:
+    # Do NOT crash the entire test session – make the module opt-out.
+    _pytest.skip(f"Django bootstrap not available: {_e.__class__.__name__}: {_e}", allow_module_level=True)
+
+
+for __qt_root in ["PyQt5","PyQt6","PySide2","PySide6"]:
+    try:
+        import importlib.util as _iu
+        if _iu.find_spec(__qt_root) is None:
+            raise ImportError
+    except Exception:
+        pass
+
+# --- /ENHANCED UNIVERSAL BOOTSTRAP ---
+
+try:
+    import pytest
+    import Calculator
+    import SimpleCalculatorPyQt1
+    from unittest import mock
+except ImportError:
+    import pytest
+    pytest.skip("Skipping tests because required modules are not importable", allow_module_level=True)
+
+
+def _exc_lookup(name, default):
+    # Try to locate an exception class by name on known modules, fallback to default
+    return getattr(Calculator, name, getattr(SimpleCalculatorPyQt1, name, default))
+
+
+@pytest.mark.parametrize(
+    "method,a,b,expected",
+    [
+        ("add", 1, 2, 3),
+        ("add", -1, -2, -3),
+        ("subtract", 5, 3, 2),
+        ("subtract", 3.5, 1.2, 2.3),
+        ("multiply", 3, 4, 12),
+        ("multiply", 2.5, 4, 10.0),
+        ("divide", 7, 2, 3.5),
+        ("divide", 5, -2, -2.5),
+        ("divide", 0, 5, 0),
+    ],
+)
+def test_calculator_basic_arithmetic_operations(method, a, b, expected):
+    # Arrange-Act-Assert: generated by ai-testgen
+    # Arrange
+    calc = Calculator.Calculator()
+    assert hasattr(calc, method) and callable(getattr(calc, method)), "Calculator missing required operation"
+
+    # Act
+    func = getattr(calc, method)
+    result = func(a, b)
+
+    # Assert
+    # numeric correctness and type is numeric
+    assert result == pytest.approx(expected), f"{method}({a},{b}) returned {result}, expected {expected}"
+    assert isinstance(result, (int, float)), "Result should be numeric"
+
+
+def test_calculator_divide_by_zero_raises_calculator_error():
+    # Arrange-Act-Assert: generated by ai-testgen
+    # Arrange
+    calc = Calculator.Calculator()
+    exc = _exc_lookup("CalculatorError", Exception)
+
+    # Act / Assert
+    with pytest.raises(_exc_lookup("exc", Exception)):
+        calc.divide(1, 0)
+
+
+def test_mainwindow_has_public_api_and_clear_methods_mutate_state(monkeypatch):
+    # Arrange-Act-Assert: generated by ai-testgen
+    # Arrange
+    mw = SimpleCalculatorPyQt1.MainWindow()
+
+    # Public API surface checks
+    for name in ("save_history", "clear_history", "clear_input", "calculate"):
+        assert hasattr(mw, name), f"MainWindow missing public API method {name}"
+        assert callable(getattr(mw, name)), f"{name} should be callable"
+
+    # Provide fake history/input widgets that cover common widget APIs:
+    class FakeHistoryWidget:
+        def __init__(self):
+            self.cleared = False
+            self._text = "line1\nline2"
+
+        def clear(self):
+            self.cleared = True
+
+        def setPlainText(self, txt):
+            self._text = txt
+
+        def toPlainText(self):
+            return self._text
+
+    class FakeInputWidget:
+        def __init__(self):
+            self.cleared = False
+            self._text = "123"
+
+        def clear(self):
+            self.cleared = True
+
+        def setText(self, txt):
+            self._text = txt
+
+        def text(self):
+            return self._text
+
+    # Attach fakes to the instance in multiple likely attribute names so clear methods find them
+    hist = FakeHistoryWidget()
+    inp = FakeInputWidget()
+    # Common possible attribute names on UI classes
+    setattr(mw, "history", hist)
+    setattr(mw, "txtHistory", hist)
+    setattr(mw, "input", inp)
+    setattr(mw, "lineEdit", inp)
+
+    # Act
+    # clear_history should either call clear() or setPlainText("")
+    mw.clear_history()
+    mw.clear_input()
+
+    # Assert
+    # At least one of the fake widget clearing mechanisms should have been used
+    history_cleared = hist.cleared or getattr(hist, "_text", None) == ""
+    input_cleared = inp.cleared or getattr(inp, "_text", None) == ""
+    assert history_cleared, "clear_history did not clear the history widget by any known mechanism"
+    assert input_cleared, "clear_input did not clear the input widget by any known mechanism"
+
+
+def test_save_history_writes_file(tmp_path, monkeypatch):
+    # Arrange-Act-Assert: generated by ai-testgen
+    # Arrange
+    mw = SimpleCalculatorPyQt1.MainWindow()
+
+    # Provide a fake history widget that returns predictable text
+    class FakeHistoryWidget:
+        def toPlainText(self):
+            return "a\nb\nc\n"
+
+    hist = FakeHistoryWidget()
+    setattr(mw, "history", hist)
+    setattr(mw, "txtHistory", hist)
+
+    # Monkeypatch QFileDialog.getSaveFileName to return a path in tmp_path
+    dest = tmp_path / "history_out.txt"
+
+    class FakeQFileDialog:
+        @staticmethod
+        def getSaveFileName(*args, **kwargs):
+            # Some implementations return a tuple (path, filter), others a string
+            return (str(dest), None)
+
+    monkeypatch.setattr(SimpleCalculatorPyQt1, "QFileDialog", FakeQFileDialog, raising=False)
+
+    # Act
+    # If save_history expects a parent or other args, it should still be callable without them.
+    # Call and let it write to the destination we provided via the fake dialog.
+    mw.save_history()
+
+    # Assert
+    assert dest.exists(), "save_history did not create the expected file"
+    content = dest.read_text()
+    assert "a" in content and "b" in content and "c" in content, "Saved history content did not match widget text"

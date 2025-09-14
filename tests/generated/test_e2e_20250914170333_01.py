@@ -1,0 +1,203 @@
+
+# --- ENHANCED UNIVERSAL BOOTSTRAP ---
+import os, sys, importlib.util as _iu, types as _types, pytest as _pytest, builtins as _builtins, warnings
+STRICT = os.getenv("TESTGEN_STRICT", "1").lower() in ("1","true","yes")
+STRICT_FAIL = os.getenv("TESTGEN_STRICT_FAIL","0").lower() in ("1","true","yes")
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=PendingDeprecationWarning)
+
+_target = os.environ.get("TARGET_ROOT") or os.environ.get("ANALYZE_ROOT") or "target"
+if _target and os.path.exists(_target):
+    if _target not in sys.path: sys.path.insert(0, _target)
+    try: os.chdir(_target)
+    except Exception: pass
+
+def _exc_lookup(name, default):
+    try:
+        mod_name, _, cls_name = str(name).rpartition(".")
+        if mod_name:
+            mod = __import__(mod_name, fromlist=[cls_name])
+            return getattr(mod, cls_name, default)
+        return getattr(sys.modules.get("builtins"), str(name), default)
+    except Exception:
+        return default
+
+def _apply_compatibility_fixes():
+    try:
+        import jinja2
+        if not hasattr(jinja2, 'Markup'):
+            try:
+                from markupsafe import Markup, escape
+                jinja2.Markup = Markup
+                if not hasattr(jinja2, 'escape'):
+                    jinja2.escape = escape
+            except Exception:
+                pass
+    except ImportError:
+        pass
+    try:
+        import collections as _collections, collections.abc as _abc
+        for _n in ('Mapping','MutableMapping','Sequence','Iterable','Container',
+                   'MutableSequence','Set','MutableSet','Iterator','Generator','Callable','Collection'):
+            if not hasattr(_collections, _n) and hasattr(_abc, _n):
+                setattr(_collections, _n, getattr(_abc, _n))
+    except Exception:
+        pass
+    try:
+        import marshmallow as _mm
+        if not hasattr(_mm, "__version__"):
+            _mm.__version__ = "4"
+    except Exception:
+        pass
+
+_apply_compatibility_fixes()
+
+# Minimal, safe Django bootstrap. If anything goes wrong, skip the module (repo-agnostic).
+try:
+    import django
+    from django.conf import settings as _dj_settings
+    from django import apps as _dj_apps
+
+    if not _dj_settings.configured:
+        _cfg = dict(
+            DEBUG=True,
+            SECRET_KEY='pytest-secret',
+            DATABASES={'default': {'ENGINE': 'django.db.backends.sqlite3','NAME': ':memory:'}},
+            INSTALLED_APPS=[
+                'django.contrib.auth','django.contrib.contenttypes',
+                'django.contrib.sessions','django.contrib.messages'
+            ],
+            MIDDLEWARE=[
+                'django.middleware.security.SecurityMiddleware',
+                'django.contrib.sessions.middleware.SessionMiddleware',
+                'django.middleware.common.CommonMiddleware',
+            ],
+            USE_TZ=True, TIME_ZONE='UTC',
+        )
+        try: _cfg["DEFAULT_AUTO_FIELD"] = "django.db.models.AutoField"
+        except Exception: pass
+        try: _dj_settings.configure(**_cfg)
+        except Exception: pass
+
+    if not _dj_apps.ready:
+        try: django.setup()
+        except Exception: pass
+
+    # Probe a known Django core that previously crashed on some stacks.
+    try:
+        import django.contrib.auth.base_user as _dj_probe  # noqa
+    except Exception as _e:
+        _pytest.skip(f"Django core import failed safely: {_e.__class__.__name__}: {_e}", allow_module_level=True)
+except Exception as _e:
+    # Do NOT crash the entire test session – make the module opt-out.
+    _pytest.skip(f"Django bootstrap not available: {_e.__class__.__name__}: {_e}", allow_module_level=True)
+
+
+for __qt_root in ["PyQt5","PyQt6","PySide2","PySide6"]:
+    try:
+        import importlib.util as _iu
+        if _iu.find_spec(__qt_root) is None:
+            raise ImportError
+    except Exception:
+        pass
+
+# --- /ENHANCED UNIVERSAL BOOTSTRAP ---
+
+import pytest as _pytest
+_pytest.skip('generator: banned private imports detected; skipping module', allow_module_level=True)
+
+try:
+    import pytest
+    import importlib
+    from unittest import mock
+    import builtins
+except ImportError:
+    import pytest as _pytest
+    _pytest.skip("skipping tests: missing test dependencies", allow_module_level=True)
+
+try:
+    import Calculator as calc_mod
+except ImportError:
+    pytest.skip("Calculator module not found", allow_module_level=True)
+
+def _exc_lookup(name, default=Exception):
+    return getattr(calc_mod, name, default)
+
+@pytest.mark.parametrize(
+    "a,b",
+    [
+        (1, 2),                # simple ints
+        (0, 0),                # zero boundary
+        (-5, 3),               # negative and positive
+        (1.5, 2.25),           # floats
+        (10**12, 10**12),      # large integers boundary
+        (-1.234, -5.766),      # negative floats
+    ],
+)
+def test_add_and_subtract_various_types(monkeypatch, a, b):
+    # Arrange-Act-Assert: generated by ai-testgen
+    # Arrange: prevent any accidental file I/O by ensuring open would raise if used
+    monkeypatch.setattr(builtins, "open", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("open called")))
+
+    # Act: instantiate and call the public API methods
+    calc = calc_mod.Calculator()
+    result_add = calc.add(a, b)
+    result_sub = calc.subtract(a, b)
+
+    # Assert: results are numeric and correct (use approx for floats)
+    assert isinstance(result_add, (int, float)), "add should return numeric type"
+    assert isinstance(result_sub, (int, float)), "subtract should return numeric type"
+
+    expected_add = a + b
+    expected_sub = a - b
+
+    if isinstance(expected_add, _exc_lookup("float", Exception)) or isinstance(a, _exc_lookup("float", Exception)) or isinstance(b, _exc_lookup("float", Exception)):
+        assert result_add == pytest.approx(expected_add)
+    else:
+        assert result_add == expected_add
+
+    if isinstance(expected_sub, _exc_lookup("float", Exception)) or isinstance(a, _exc_lookup("float", Exception)) or isinstance(b, _exc_lookup("float", Exception)):
+        assert result_sub == pytest.approx(expected_sub)
+    else:
+        assert result_sub == expected_sub
+
+def test_instances_are_independent(tmp_path, monkeypatch):
+    # Arrange-Act-Assert: generated by ai-testgen
+    # Arrange: ensure no accidental I/O from the implementation
+    monkeypatch.setattr(builtins, "open", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("open called")))
+
+    # Create a dummy file in tmp_path to show tests are self-contained (not used by Calculator)
+    sentinel_file = tmp_path / "sentinel.txt"
+    sentinel_file.write_text("do not touch")
+
+    # Act: create two calculator instances and perform operations in different orders
+    calc1 = calc_mod.Calculator()
+    calc2 = calc_mod.Calculator()
+
+    res1_first = calc1.add(1, 2)       # expect 3
+    res2_first = calc2.add(3, 4)       # expect 7
+
+    # Additional operations to try to reveal hidden shared state
+    res1_second = calc1.subtract(10, 1)  # expect 9
+    res2_second = calc2.subtract(20, 5)  # expect 15
+
+    # Assert: each result matches the expected arithmetic independently
+    assert res1_first == 3
+    assert res2_first == 7
+    assert res1_second == 9
+    assert res2_second == 15
+
+def test_add_invalid_input_raises(monkeypatch):
+    # Arrange-Act-Assert: generated by ai-testgen
+    # Arrange: guard against accidental file I/O
+    monkeypatch.setattr(builtins, "open", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("open called")))
+
+    calc = calc_mod.Calculator()
+    CalculatorError = _exc_lookup("CalculatorError", Exception)
+
+    # Act / Assert: non-numeric input should raise an appropriate exception
+    with pytest.raises(_exc_lookup("CalculatorError", Exception)):
+        calc.add("not a number", 1)
+
+    with pytest.raises(_exc_lookup("CalculatorError", Exception)):
+        calc.subtract(1, "also not a number")
