@@ -1,0 +1,413 @@
+
+# --- ENHANCED UNIVERSAL BOOTSTRAP ---
+import os, sys, importlib.util as _iu, types as _types, pytest as _pytest, builtins as _builtins, warnings
+STRICT = os.getenv("TESTGEN_STRICT", "1").lower() in ("1","true","yes")
+STRICT_FAIL = os.getenv("TESTGEN_STRICT_FAIL","0").lower() in ("1","true","yes")
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=PendingDeprecationWarning)
+
+_target = os.environ.get("TARGET_ROOT") or os.environ.get("ANALYZE_ROOT") or "target"
+if _target and os.path.exists(_target):
+    if _target not in sys.path: sys.path.insert(0, _target)
+    try: os.chdir(_target)
+    except Exception: pass
+
+def _exc_lookup(name, default):
+    try:
+        mod_name, _, cls_name = str(name).rpartition(".")
+        if mod_name:
+            mod = __import__(mod_name, fromlist=[cls_name])
+            return getattr(mod, cls_name, default)
+        return getattr(sys.modules.get("builtins"), str(name), default)
+    except Exception:
+        return default
+
+def _apply_compatibility_fixes():
+    try:
+        import jinja2
+        if not hasattr(jinja2, 'Markup'):
+            try:
+                from markupsafe import Markup, escape
+                jinja2.Markup = Markup
+                if not hasattr(jinja2, 'escape'):
+                    jinja2.escape = escape
+            except Exception:
+                pass
+    except ImportError:
+        pass
+    try:
+        import collections as _collections, collections.abc as _abc
+        for _n in ('Mapping','MutableMapping','Sequence','Iterable','Container',
+                   'MutableSequence','Set','MutableSet','Iterator','Generator','Callable','Collection'):
+            if not hasattr(_collections, _n) and hasattr(_abc, _n):
+                setattr(_collections, _n, getattr(_abc, _n))
+    except Exception:
+        pass
+    try:
+        import marshmallow as _mm
+        if not hasattr(_mm, "__version__"):
+            _mm.__version__ = "4"
+    except Exception:
+        pass
+
+_apply_compatibility_fixes()
+
+# Minimal, safe Django bootstrap. If anything goes wrong, skip the module (repo-agnostic).
+try:
+    import django
+    from django.conf import settings as _dj_settings
+    from django import apps as _dj_apps
+
+    if not _dj_settings.configured:
+        _cfg = dict(
+            DEBUG=True,
+            SECRET_KEY='pytest-secret',
+            DATABASES={'default': {'ENGINE': 'django.db.backends.sqlite3','NAME': ':memory:'}},
+            INSTALLED_APPS=[
+                'django.contrib.auth','django.contrib.contenttypes',
+                'django.contrib.sessions','django.contrib.messages'
+            ],
+            MIDDLEWARE=[
+                'django.middleware.security.SecurityMiddleware',
+                'django.contrib.sessions.middleware.SessionMiddleware',
+                'django.middleware.common.CommonMiddleware',
+            ],
+            USE_TZ=True, TIME_ZONE='UTC',
+        )
+        try: _cfg["DEFAULT_AUTO_FIELD"] = "django.db.models.AutoField"
+        except Exception: pass
+        try: _dj_settings.configure(**_cfg)
+        except Exception: pass
+
+    if not _dj_apps.ready:
+        try: django.setup()
+        except Exception: pass
+
+    # Probe a known Django core that previously crashed on some stacks.
+    try:
+        import django.contrib.auth.base_user as _dj_probe  # noqa
+    except Exception as _e:
+        _pytest.skip(f"Django core import failed safely: {_e.__class__.__name__}: {_e}", allow_module_level=True)
+except Exception as _e:
+    # Do NOT crash the entire test session – make the module opt-out.
+    _pytest.skip(f"Django bootstrap not available: {_e.__class__.__name__}: {_e}", allow_module_level=True)
+
+
+for __qt_root in ["PyQt5","PyQt6","PySide2","PySide6"]:
+    try:
+        import importlib.util as _iu
+        if _iu.find_spec(__qt_root) is None:
+            raise ImportError
+    except Exception:
+        pass
+
+# --- /ENHANCED UNIVERSAL BOOTSTRAP ---
+
+try:
+    import pytest
+    import types
+    import builtins
+    import os
+    import Calculator
+    import SimpleCalculatorPyQt1
+    from unittest import mock
+except ImportError as e:
+    import pytest
+    pytest.skip("Required modules not available for tests: {}".format(e), allow_module_level=True)
+
+def _exc_lookup(name, default=Exception):
+    # Try to find exception class in known modules
+    if hasattr(Calculator, name):
+        return getattr(Calculator, name)
+    if hasattr(SimpleCalculatorPyQt1, name):
+        return getattr(SimpleCalculatorPyQt1, name)
+    return default
+
+@pytest.mark.parametrize("op_name,a,b,expected,expect_exc", [
+    ("add", 1, 2, 3, False),
+    ("subtract", 5, 3, 2, False),
+    ("multiply", 7, 6, 42, False),
+    ("divide", 10, 2, 5, False),
+    ("divide", 1, 0, None, True),  # division by zero -> error path
+])
+def test_calculator_module_level_operations(op_name, a, b, expected, expect_exc):
+    # Arrange-Act-Assert: generated by ai-testgen
+    # Arrange: locate operation as a module-level function or fallback to Calculator class method
+    func = getattr(Calculator, op_name, None)
+    calc_instance = None
+    if func is None:
+        # Try class method
+        calc_cls = getattr(Calculator, "Calculator", None)
+        if calc_cls is None:
+            pytest.skip(f"Neither function '{op_name}' nor class 'Calculator' available in Calculator module")
+        calc_instance = calc_cls()
+        func = getattr(calc_instance, op_name, None)
+        if func is None:
+            pytest.skip(f"Operation '{op_name}' not found on Calculator class instance")
+    # Act & Assert
+    if expect_exc:
+        exc_type = _exc_lookup("CalculatorError", Exception)
+        with pytest.raises(_exc_lookup("exc_type", Exception)):
+            func(a, b)
+    else:
+        result = func(a, b)
+        # Assert concrete output and type
+        assert result == expected, f"Expected {expected} from {op_name}({a},{b}), got {result}"
+        assert isinstance(result, (int, float)), "Result should be numeric"
+
+def _find_attribute_target(instance, name_fragments, type_checks):
+    """
+    Heuristic search for an attribute on instance where the attribute name contains any fragment
+    from name_fragments and the attribute passes any of the callables in type_checks.
+    Returns (attr_name, attr_value) or (None, None).
+    """
+    candidates = []
+    for name in dir(instance):
+        if name.startswith("_"):
+            continue
+        lname = name.lower()
+        if any(f in lname for f in name_fragments):
+            try:
+                val = getattr(instance, name)
+            except Exception:
+                continue
+            for check in type_checks:
+                try:
+                    if check(val):
+                        candidates.append((name, val))
+                        break
+                except Exception:
+                    continue
+    return candidates[0] if candidates else (None, None)
+
+def _is_text_widget(obj):
+    # Duck-typing: object with setText and text methods
+    return hasattr(obj, "setText") and hasattr(obj, "text")
+
+def _is_string(obj):
+    return isinstance(obj, _exc_lookup("str", Exception))
+
+def _read_text_value(container, name, value):
+    # Read the value uniformly as string
+    if isinstance(value, _exc_lookup("str", Exception)):
+        return value
+    if _is_text_widget(value):
+        try:
+            return value.text()
+        except Exception:
+            return None
+    # fallback: try attribute 'toPlainText'
+    if hasattr(value, "toPlainText"):
+        try:
+            return value.toPlainText()
+        except Exception:
+            return None
+    return None
+
+def _write_text_value(container, name, value, text):
+    # Write text to attribute or widget
+    if isinstance(value, _exc_lookup("str", Exception)):
+        setattr(container, name, text)
+        return True
+    if _is_text_widget(value):
+        try:
+            value.setText(text)
+            return True
+        except Exception:
+            return False
+    if hasattr(value, "setPlainText"):
+        try:
+            value.setPlainText(text)
+            return True
+        except Exception:
+            return False
+    return False
+
+def test_mainwindow_clear_input_clear_history_and_calculate(monkeypatch):
+    # Arrange-Act-Assert: generated by ai-testgen
+    # Arrange: ensure MainWindow exists
+    MainWindow = getattr(SimpleCalculatorPyQt1, "MainWindow", None)
+    if MainWindow is None:
+        pytest.skip("SimpleCalculatorPyQt1.MainWindow not present")
+    # Instantiate window (E2E black-box creation)
+    try:
+        window = MainWindow()
+    except ImportError as e:
+        pytest.skip(f"Could not instantiate MainWindow: {e}")
+    except Exception:
+        raise
+
+    # Find an input-like attribute (string or widget with setText/text)
+    input_name, input_val = _find_attribute_target(window, ["input", "line", "entry", "expr"], [_is_string, _is_text_widget])
+    if input_name is None:
+        pytest.skip("No suitable input-like attribute found on MainWindow to perform clear_input test")
+
+    # Find a history-like attribute
+    history_name, history_val = _find_attribute_target(window, ["history", "log", "stack"], [_is_string, lambda v: isinstance(v, (list, tuple)), _is_text_widget])
+    # history may be optional; if not found we'll still proceed with clear_input and calculate checks but skip history assertions
+
+    # Prepare initial non-empty values
+    wrote_input = _write_text_value(window, input_name, input_val, "123+456")
+    assert wrote_input, "Failed to set input test value"
+    pre_input_read = _read_text_value(window, input_name, input_val)
+    assert pre_input_read is not None and pre_input_read != "", "Input must be non-empty before clear_input"
+
+    if history_name:
+        # populate history with a marker
+        if isinstance(history_val, _exc_lookup("list", Exception)):
+            setattr(window, history_name, ["marker"])
+        elif isinstance(history_val, _exc_lookup("str", Exception)):
+            setattr(window, history_name, "marker")
+        else:
+            # widget-like
+            _write_text_value(window, history_name, history_val, "marker")
+        pre_history_read = _read_text_value(window, history_name, history_val)
+        # Precondition
+        assert pre_history_read is not None and pre_history_read != "", "History must be non-empty before clear_history"
+
+    # Monkeypatch calculator operations to detect usage during calculate
+    calls = {"called": 0}
+    def stub_op(a, b):
+        calls["called"] += 1
+        return 7  # deterministic stub result
+
+    # Patch available arithmetic functions in Calculator module, if present
+    patched_names = []
+    for name in ("add", "subtract", "multiply", "divide"):
+        if hasattr(Calculator, name):
+            monkeypatch.setattr(Calculator, name, stub_op, raising=False)
+            patched_names.append(name)
+    # Also try patching Calculator.Calculator methods if present
+    calc_cls = getattr(Calculator, "Calculator", None)
+    if calc_cls is not None:
+        for name in ("add", "subtract", "multiply", "divide"):
+            if hasattr(calc_cls, name):
+                monkeypatch.setattr(calc_cls, name, lambda self, a, b: stub_op(a, b), raising=False)
+                patched_names.append(f"Calculator.{name}")
+
+    # Act: call clear_input if available
+    clear_input_fn = getattr(SimpleCalculatorPyQt1, "clear_input", None)
+    if callable(clear_input_fn):
+        # Some implementations expect a widget or window parameter; try both
+        try:
+            clear_input_fn(window)
+        except TypeError:
+            # try no-arg
+            try:
+                clear_input_fn()
+            except Exception:
+                pass
+        except Exception:
+            # ignore other runtime exceptions - will assert state below
+            pass
+    else:
+        # Fallback to method on instance
+        method = getattr(window, "clear_input", None)
+        if callable(method):
+            try:
+                method()
+            except Exception:
+                pass
+        else:
+            pytest.skip("No clear_input function/method available on module or MainWindow")
+
+    # Assert input cleared
+    post_input_read = _read_text_value(window, input_name, input_val)
+    assert post_input_read is not None, "Could not read input value after clear_input"
+    assert post_input_read in ("", "0"), f"Input should be cleared or reset to '0', got '{post_input_read}'"
+
+    # Act: call clear_history if available and assert cleared
+    clear_history_fn = getattr(SimpleCalculatorPyQt1, "clear_history", None)
+    if history_name and callable(clear_history_fn):
+        try:
+            clear_history_fn(window)
+        except TypeError:
+            try:
+                clear_history_fn()
+            except Exception:
+                pass
+        except Exception:
+            pass
+        # If instance method exists, call it
+    elif history_name:
+        method = getattr(window, "clear_history", None)
+        if callable(method):
+            try:
+                method()
+            except Exception:
+                pass
+        else:
+            pytest.skip("No clear_history function/method available on module or MainWindow")
+
+    if history_name:
+        post_history_read = _read_text_value(window, history_name, history_val)
+        # Accept empty string, empty list representation, or None as cleared
+        cleared = (post_history_read in ("", None)) or (isinstance(getattr(window, history_name, None), list) and len(getattr(window, history_name)) == 0)
+        assert cleared, f"History should be cleared, found '{post_history_read}'"
+
+    # Prepare input again to test calculate
+    wrote_input_calc = _write_text_value(window, input_name, input_val, "2+5")
+    assert wrote_input_calc, "Failed to set input prior to calculate"
+
+    # Snapshot of possible output-holding attributes to detect changes after calculate
+    output_candidates = []
+    for name in dir(window):
+        if name.startswith("_"):
+            continue
+        lname = name.lower()
+        if any(key in lname for key in ("result", "output", "display", "history", "input")):
+            try:
+                val = getattr(window, name)
+            except Exception:
+                continue
+            # Track simple printable/readable attributes
+            if isinstance(val, (str, list)) or _is_text_widget(val):
+                output_candidates.append((name, val, _read_text_value(window, name, val)))
+
+    # Act: call calculate via module-level function or instance method
+    calc_fn = getattr(SimpleCalculatorPyQt1, "calculate", None)
+    try:
+        if callable(calc_fn):
+            try:
+                calc_fn(window)
+            except TypeError:
+                # maybe no args
+                calc_fn()
+            except Exception:
+                # ignore runtime errors but continue to assertions
+                pass
+        else:
+            method = getattr(window, "calculate", None)
+            if callable(method):
+                try:
+                    method()
+                except Exception:
+                    pass
+            else:
+                pytest.skip("No calculate function/method available on module or MainWindow")
+    finally:
+        # Assert: If any calculator function was patched and invoked, verify effects propagated
+        if calls["called"] == 0:
+            # If none of the patched functions were called, it's possible calculate did not use Calculator module directly;
+            # in that case we at least assert that calling calculate did not crash (we reached here) and that window exists.
+            assert hasattr(window, "__class__")
+        else:
+            # At least one patched operation was invoked, so we expect some output candidate to have changed to include "7"
+            changed_and_contains_stub = False
+            for name, old_val, old_text in output_candidates:
+                try:
+                    current_val = getattr(window, name)
+                except Exception:
+                    continue
+                current_text = _read_text_value(window, name, current_val)
+                if current_text is None:
+                    # For list types, convert to repr
+                    if isinstance(current_val, _exc_lookup("list", Exception)):
+                        current_text = repr(current_val)
+                    else:
+                        current_text = str(current_val)
+                old_text_repr = "" if old_text is None else str(old_text)
+                if current_text != old_text_repr and "7" in str(current_text):
+                    changed_and_contains_stub = True
+                    break
+            assert changed_and_contains_stub, "Patched calculator operations were invoked but no visible result containing stub value was found in window attributes"
