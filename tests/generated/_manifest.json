@@ -23,24 +23,5 @@
         "functiondef:calculate": "b3fefcb735ae2023f531955a08f41decc84cc3cbeb2253d450fa366e6c70bed5"
       }
     }
-  },
-  "runs": [
-    {
-      "ts": "2025-09-18T16:35:50.479910Z",
-      "files_generated": [
-        "tests/generated/DeviPrasad372002_test-calculator.git/current/test_unit_20250918163124_01.py",
-        "tests/generated/DeviPrasad372002_test-calculator.git/current/test_unit_20250918163124_02.py",
-        "tests/generated/DeviPrasad372002_test-calculator.git/current/test_unit_20250918163124_03.py",
-        "tests/generated/DeviPrasad372002_test-calculator.git/current/test_integ_20250918163124_01.py",
-        "tests/generated/DeviPrasad372002_test-calculator.git/current/test_integ_20250918163124_02.py",
-        "tests/generated/DeviPrasad372002_test-calculator.git/current/test_integ_20250918163124_03.py"
-      ],
-      "change_summary": {
-        "added_or_modified": 0,
-        "deleted": 2,
-        "no_changes": false,
-        "files_analyzed": 2
-      }
-    }
-  ]
+  }
 }
